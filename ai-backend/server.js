@@ -13,11 +13,14 @@
  *   GEMINI_API_KEY=your_key node server.js
  */
 
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const { generateExcalidrawScene } = require("./excalidrawCarouselRenderer");
+const { generateWireframeScene } = require("./excalidrawWireframeRenderer");
 
 const app = express();
 const PORT = 3016;
@@ -28,26 +31,58 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = "gemini-3.1-flash-lite-preview";
+// Wireframe uses a more capable model for better JSON fidelity
+const GEMINI_WIREFRAME_MODEL = "gemini-3-flash-preview";
 
 // ============================================================
 // SYSTEM PROMPT — Professional diagram generation
 // ============================================================
 const SYSTEM_PROMPT = `You are a world-class diagram architect. You generate clean, elegant Mermaid diagrams that match a hand-drawn whiteboard aesthetic.
 
-## CRITICAL RULES:
-1. Output ONLY valid Mermaid syntax — no explanations, no markdown fences, no backticks
-2. If the user writes in Portuguese, use Portuguese labels but valid Mermaid syntax
-3. Do NOT overuse emojis — max 2-3 per diagram, only on key nodes
-4. Maximum 15 nodes per diagram for readability
-5. Choose the best diagram type automatically:
-   - Processes/workflows → flowchart TD
-   - Brainstorming/concepts/mindmaps → flowchart TD (styled as mindmap — see below)
-   - State machines/lifecycle → stateDiagram-v2
-   - Timelines → timeline
-   - Data distribution → pie
-   - Sequences/APIs → sequenceDiagram
+## OUTPUT RULES — ABSOLUTE PRIORITY:
+1. Output ONLY the raw Mermaid code — zero preamble, zero postamble, zero explanations
+2. NEVER wrap output in markdown fences (no \`\`\`mermaid, no \`\`\`)
+3. NEVER add commentary before or after the diagram
+4. If the user writes in Portuguese, use Portuguese labels — still valid Mermaid syntax
+5. Do NOT overuse emojis — max 2-3 per diagram, only on key nodes
+6. Maximum 15 nodes per diagram for readability
 
-## IMPORTANT — STYLING RULES PER DIAGRAM TYPE:
+## DIAGRAM TYPE SELECTION:
+- Processes/workflows → flowchart TD
+- Brainstorming/concepts/mindmaps → flowchart TD (styled as mindmap — see below)
+- State machines/lifecycle → stateDiagram-v2
+- Timelines → timeline
+- Data distribution → pie
+- Sequences/APIs → sequenceDiagram
+
+## MERMAID SYNTAX SAFETY RULES — PREVENT PARSE ERRORS:
+These rules prevent the most common LLM-induced Mermaid syntax failures:
+
+1. **Node labels with special characters**: ALWAYS wrap in double quotes
+   ✅ A["User logs in"] --> B["Auth service checks token"]
+   ❌ A[User logs in] --> B[Auth service checks token]
+
+2. **NEVER use backticks inside node labels** — they break the renderer silently
+   ✅ A["Process data"]
+   ❌ A[\`Process data\`]
+
+3. **Avoid AND/OR/NOT as standalone words in labels** — they are logical operators
+   ✅ A["Login or Register"] (quoted is safer)
+   ❌ A[Login or Register] (may break parser)
+
+4. **Avoid angle brackets < > in labels** — they are interpreted as HTML
+   ✅ A["Input greater than 0"]
+   ❌ A[Input > 0]
+
+5. **Node IDs must be alphanumeric** — use letters and numbers only, no spaces
+   ✅ userLogin --> authCheck
+   ❌ user login --> auth check
+
+6. **Sequence diagram participants**: use simple names, no special characters
+   ✅ participant UserApp as "User App"
+   ❌ participant User App
+
+## STYLING RULES PER DIAGRAM TYPE:
 
 ### FLOWCHARTS (flowchart TD/LR) — FULL STYLING SUPPORTED:
 - Use classDef with the pastel palette below
@@ -70,13 +105,12 @@ When the user asks for a mindmap, mind map, mapa mental, or brainstorming:
 - Main branches: use [ ] square shape, each with a different classDef color
 - Sub-items: use ( ) rounded shape with classDef neutral
 - Connect root → branches → sub-items with arrows
-- This ensures colors and styling work properly
 - Example structure:
   flowchart TD
-    ROOT((Topic)) --> A[Branch 1]
-    ROOT --> B[Branch 2]
-    A --> A1(Detail 1)
-    A --> A2(Detail 2)
+    ROOT(("Topic")) --> A["Branch 1"]
+    ROOT --> B["Branch 2"]
+    A --> A1("Detail 1")
+    A --> A2("Detail 2")
     classDef primary fill:#dbeafe,color:#1e40af,stroke:#93c5fd,stroke-width:1.5px
     class ROOT primary
 
@@ -92,11 +126,101 @@ When the user asks for a mindmap, mind map, mapa mental, or brainstorming:
 - Use viewBox="0 0 100 100" and stroke-linecap="round"`;
 
 // ============================================================
+// TEMPLATE PERSONAS — injected on top of SYSTEM_PROMPT
+// ============================================================
+const TEMPLATE_PERSONAS = {
+  userflow: `
+## YOUR PERSONA FOR THIS SESSION:
+You are a Senior UX Designer at Apple with 15 years of experience designing iOS and macOS products. You think in user journeys, not just screens. You obsess over clarity, minimal friction, and delightful transitions.
+
+When generating diagrams, always:
+- Map EVERY user action and system response
+- Include decision points (happy path vs. error states)
+- Label transitions with verbs ("taps", "submits", "sees", "receives")
+- Group by user goal (onboarding, checkout, settings, etc.)
+- Use sequenceDiagram for user↔system flows, flowchart TD for navigation maps
+- Think about edge cases: empty states, errors, loading states
+- Suggest 1 UX improvement at the end (as a comment in the Mermaid code)
+`,
+
+  wireframe: `
+## YOUR PERSONA FOR THIS SESSION:
+You are a Principal Product Designer at a top-tier design agency. You wireframe at the speed of thought, always in grayscale (no colors in wireframes), always mobile-first.
+
+When generating diagrams:
+- Use flowchart TD to represent screen layout hierarchy
+- Represent screens as rectangular nodes: ["Screen Name"]
+- Represent components as rounded: ("Component")
+- Show navigation flows with labeled arrows: -- "CTA label" -->
+- Group screens by feature area using subgraph
+- Focus on information architecture and navigation patterns
+- Keep it simple — wireframes are for structure, not beauty
+`,
+
+  erd: `
+## YOUR PERSONA FOR THIS SESSION:
+You are a Staff Backend Engineer who designs bulletproof database schemas. You've built systems that serve 100M+ users. You never design without thinking about indexes, foreign keys, and data integrity.
+
+When generating diagrams:
+- ALWAYS use erDiagram for database schemas
+- Include ALL relevant attributes for each entity
+- Mark primary keys (PK) and foreign keys (FK) clearly
+- Show relationships with proper cardinality (||--o{, }|..|{, etc.)
+- Add a comment explaining the main design decision
+- Think about: normalization, nullable fields, junction tables for M:N
+- Use snake_case for field names
+`,
+
+  architecture: `
+## YOUR PERSONA FOR THIS SESSION:
+You are a Distinguished Software Architect at a FAANG company. You've designed distributed systems, microservices architectures, and event-driven platforms. You think in terms of reliability, scalability, and observability.
+
+When generating diagrams:
+- Use flowchart LR for system architecture (left-to-right flow)
+- Represent services as boxes: ["Service Name"]
+- Represent databases as cylinders: [("Database")]
+- Represent message queues as stadium shapes: (["Queue"])
+- Show data flows with labeled arrows
+- Group by layer using subgraph: Frontend, Backend, Data, Infrastructure
+- Include: load balancers, caches, message brokers where relevant
+- Think about: failure points, scalability bottlenecks, security boundaries
+`,
+
+  brainstorm: `
+## YOUR PERSONA FOR THIS SESSION:
+You are a world-class facilitator and visual thinker. You've run ideation sessions for Fortune 500 companies. You know that the best ideas emerge when concepts are visually connected and clustered.
+
+When generating diagrams:
+- Use flowchart TD styled as a radial mindmap (root in center, branches outward)
+- Central concept: (( )) circle — this is the thesis or challenge
+- 4-6 main branches: [ ] squares with different classDef colors
+- Each branch has 2-3 sub-items: ( ) rounded shapes
+- Make the labels provocative and creative, not boring
+- Find unexpected connections and cross-links between branches
+- The goal is to spark new ideas, not just list the obvious ones
+`,
+
+  sequence: `
+## YOUR PERSONA FOR THIS SESSION:
+You are a Senior API Architect who has designed RESTful APIs, GraphQL schemas, and real-time WebSocket systems. You document systems so clearly that any developer can implement them without a meeting.
+
+When generating diagrams:
+- ALWAYS use sequenceDiagram for API/system interactions
+- Label all actors clearly (Client, Server, Auth Service, Database, etc.)
+- Show request and response with payload hints: -->>: "200 OK {token}"
+- Include error flows with alt/else blocks
+- Show async operations with activate/deactivate
+- Document authentication flows, webhook callbacks, polling patterns
+- Keep it precise: every arrow must represent an actual HTTP call or event
+`,
+};
+
+// ============================================================
 // POST /v1/ai/text-to-diagram/chat-streaming
 // Main endpoint for Excalidraw Text-to-Diagram
 // ============================================================
 app.post("/v1/ai/text-to-diagram/chat-streaming", async (req, res) => {
-  const { messages } = req.body;
+  const { messages, template } = req.body;
 
   if (!GEMINI_API_KEY) {
     res.status(500).json({ error: "GEMINI_API_KEY not set" });
@@ -115,22 +239,24 @@ app.post("/v1/ai/text-to-diagram/chat-streaming", async (req, res) => {
 
   // Build tools array based on what the user needs
   const tools = [];
-  
+
   // Enable Google Search Grounding for real-time web knowledge
   tools.push({ google_search: {} });
 
+  // Compose system prompt: base + optional template persona
+  const personaAddition = template && TEMPLATE_PERSONAS[template] ? TEMPLATE_PERSONAS[template] : "";
+  const finalSystemPrompt = SYSTEM_PROMPT + personaAddition;
+
   const requestBody = {
     system_instruction: {
-      parts: [{ text: SYSTEM_PROMPT }],
+      parts: [{ text: finalSystemPrompt }],
     },
     contents: geminiContents,
     tools: tools,
     generationConfig: {
-      temperature: 0.7,
+      temperature: 0.3,
       maxOutputTokens: 8192,
-      thinkingConfig: {
-        thinkingBudget: 2048,
-      },
+      thinkingConfig: { thinkingLevel: "high" },
     },
   };
 
@@ -265,7 +391,7 @@ Output ONLY the HTML code, nothing else.`;
       generationConfig: { 
         temperature: 0.7, 
         maxOutputTokens: 8192,
-        thinkingConfig: { thinkingBudget: 1024 },
+        thinkingConfig: { thinkingLevel: "high" },
       },
       tools: [{ google_search: {} }],
     };
@@ -362,6 +488,308 @@ Rules:
 });
 
 // ============================================================
+// POST /v1/ai/fetch-url
+// Fetches a URL and extracts readable text content for AI context
+// ============================================================
+app.post("/v1/ai/fetch-url", async (req, res) => {
+  const { url } = req.body;
+
+  if (!url || !url.startsWith("http")) {
+    res.status(400).json({ error: "Valid URL required" });
+    return;
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; WireframeAI/1.0)",
+        "Accept": "text/html,application/xhtml+xml,text/plain,application/json",
+      },
+      signal: AbortSignal.timeout(10000), // 10s timeout
+    });
+
+    if (!response.ok) {
+      res.status(400).json({ error: `URL returned ${response.status}` });
+      return;
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    let content = "";
+
+    if (contentType.includes("application/json")) {
+      // JSON — stringify and use directly
+      const json = await response.json();
+      content = JSON.stringify(json, null, 2).slice(0, 8000);
+    } else {
+      // HTML or text — strip tags and extract meaningful text
+      const html = await response.text();
+      content = html
+        // Remove scripts, styles, SVG, noscript
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[\s\S]*?<\/style>/gi, "")
+        .replace(/<svg[\s\S]*?<\/svg>/gi, "")
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
+        // Convert common block elements to newlines
+        .replace(/<\/?(h[1-6]|p|div|li|tr|section|article|header|footer|nav|main)[^>]*>/gi, "\n")
+        // Remove remaining HTML tags
+        .replace(/<[^>]+>/g, " ")
+        // Decode common HTML entities
+        .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ")
+        // Collapse whitespace
+        .replace(/\s{3,}/g, "\n\n")
+        .trim()
+        .slice(0, 8000);
+    }
+
+    console.log(`🔗 Fetched URL: ${url} (${content.length} chars)`);
+    res.json({ content, url });
+  } catch (err) {
+    console.error("❌ fetch-url error:", err.message);
+    res.status(500).json({ error: `Não foi possível acessar: ${err.message}` });
+  }
+});
+
+// ============================================================
+// POST /v1/ai/wireframe/excalidraw
+// Generate native Excalidraw wireframes from a description
+// ============================================================
+app.post("/v1/ai/wireframe/excalidraw", async (req, res) => {
+  const { description, screenType = "mobile", language = "pt-BR" } = req.body;
+
+  if (!GEMINI_API_KEY) {
+    res.status(500).json({ error: "GEMINI_API_KEY not set" });
+    return;
+  }
+
+  if (!description?.trim()) {
+    res.status(400).json({ error: "description is required" });
+    return;
+  }
+
+  const langName = language === "pt-BR" ? "Português Brasileiro" : "English";
+
+  const wireframePrompt = `You are a world-class UX architect. Generate a complete structured wireframe spec.
+
+Description: "${description}"
+Screen type: ${screenType} (mobile | desktop | tablet)
+Language: ${langName}
+
+## CHAIN-OF-THOUGHT — THINK BEFORE GENERATING (mandatory internal reasoning):
+Before writing any JSON, silently reason through these steps:
+1. Count every distinct screen/step/state mentioned in the description
+2. List them: "Screen 1: X, Screen 2: Y, Screen 3: Z..." (in your internal thinking only)
+3. Note any conditional branches or sub-states — each is an additional screen
+4. Confirm the final screen count before generating JSON
+
+## STEP 1 — SCREEN IDENTIFICATION RULES:
+- USER FLOW (has "Step 1/2/3", "→", numbered stages, or conditional "IF/THEN"): each step/stage/branch = one screen
+- FEATURE LIST: each major feature/page = one screen
+- PLAIN DESCRIPTION: each mentioned screen/page/state/modal = one screen
+- Sub-types listed with "/" (e.g. "Quick clip / Product promo / Full video") = separate screens
+- Conditional branches (e.g. "IF product context detected → show X") = additional screens
+- NEVER merge two distinct steps into one screen
+- NEVER skip a screen because it seems similar to another
+
+## STEP 2 — GENERATE ALL SCREENS
+Generate EVERY screen identified above. Rules:
+1. Return ONLY valid JSON — no markdown fences, no backticks, no explanations, no trailing commas
+2. FAITHFULLY represent EVERYTHING mentioned — zero omissions, zero merges
+3. ONE screen per distinct step/state/page
+4. Each screen must have ALL the UI components needed to represent that specific step accurately
+5. ALL text (labels, titles, placeholders, button labels, tab names) MUST be in ${langName} — no exceptions
+6. Connect screens with flows matching the described user journey
+7. Use as many components per screen as needed — there is NO limit
+
+## SELF-VALIDATION BEFORE OUTPUT:
+After generating the JSON internally, verify:
+- [ ] Every screen from Step 1 is present in the output
+- [ ] No two screens are merged into one
+- [ ] All text values are in ${langName}
+- [ ] JSON is syntactically valid (no trailing commas, no missing brackets)
+- [ ] Each "flows[].to" value matches an actual screen "name" in the output
+Only output the JSON after passing this checklist.
+
+## OUTPUT FORMAT
+{
+  "screens": [
+    {
+      "name": "Home",
+      "type": "${screenType}",
+      "components": [
+        ...components...
+      ],
+      "flows": [
+        { "to": "Detalhe", "label": "tap card" }
+      ]
+    }
+  ]
+}
+
+## AVAILABLE COMPONENT KINDS (use exactly these kind values):
+
+- **header**: { kind: "header", title: "AppName", hasBack: false, hasMenu: true }
+- **search**: { kind: "search", placeholder: "Buscar..." }
+- **hero**: { kind: "hero", title: "Bem-vindo!", subtitle: "Tagline", hasButton: true, buttonLabel: "Começar" }
+- **section_title**: { kind: "section_title", text: "Em destaque", hasLink: true }
+- **card_row**: { kind: "card_row", cards: [{ title: "Título", subtitle: "Meta" }] }
+- **card_list**: { kind: "card_list", items: [{ title: "Item", meta: "detalhe", hasArrow: true }] }
+- **tabs**: { kind: "tabs", labels: ["Tab1", "Tab2"], activeTab: 0 }
+- **button**: { kind: "button", label: "Fazer login", style: "primary", fullWidth: true }
+- **input**: { kind: "input", label: "E-mail", placeholder: "email@exemplo.com" }
+- **nav_bar**: { kind: "nav_bar", items: ["Home", "Buscar", "Favoritos", "Perfil"], activeItem: 0 }
+- **text_block**: { kind: "text_block", text: "Texto aqui", size: "h1" | "h2" | "body" | "caption" }
+- **image_placeholder**: { kind: "image_placeholder", caption: "Foto do produto", aspectRatio: "16:9" | "1:1" | "4:3" }
+- **divider**: { kind: "divider" }
+- **avatar_row**: { kind: "avatar_row", users: ["Ana", "Bob"], label: "2 participantes" }
+- **stat_row**: { kind: "stat_row", stats: [{ label: "Vendas", value: "1.2k" }] }
+- **form**: { kind: "form", fields: [{ label: "Nome", placeholder: "..." }], submitLabel: "Criar conta" }
+- **modal**: { kind: "modal", title: "Confirmar?", body: "...", actions: ["Cancelar", "Confirmar"] }
+- **list_item**: { kind: "list_item", title: "Item", meta: "detalhe", hasArrow: true, hasIcon: true }
+
+## EXAMPLE (in ${langName}) — Login + Home + Detail flow (mobile):
+${language === "pt-BR" ? `{
+  "screens": [
+    {
+      "name": "Login",
+      "type": "mobile",
+      "components": [
+        { "kind": "hero", "title": "Bem-vindo de volta!", "subtitle": "Entre na sua conta", "hasButton": false },
+        { "kind": "form", "fields": [{"label": "E-mail", "placeholder": "email@exemplo.com"}, {"label": "Senha", "placeholder": "••••••••"}], "submitLabel": "Entrar" },
+        { "kind": "button", "label": "Criar conta", "style": "ghost", "fullWidth": true }
+      ],
+      "flows": [{ "to": "Home", "label": "login" }]
+    },
+    {
+      "name": "Home",
+      "type": "mobile",
+      "components": [
+        { "kind": "header", "title": "AppName", "hasMenu": true },
+        { "kind": "search", "placeholder": "Buscar produtos..." },
+        { "kind": "section_title", "text": "Em destaque", "hasLink": true },
+        { "kind": "card_row", "cards": [{"title": "Produto A", "subtitle": "R$ 99"}, {"title": "Produto B", "subtitle": "R$ 149"}] },
+        { "kind": "section_title", "text": "Recentes" },
+        { "kind": "card_list", "items": [{"title": "Item 1", "meta": "há 2h"}, {"title": "Item 2", "meta": "há 5h"}] },
+        { "kind": "nav_bar", "items": ["Home", "Buscar", "Favoritos", "Perfil"] }
+      ],
+      "flows": [{ "to": "Detalhe", "label": "tap card" }]
+    },
+    {
+      "name": "Detalhe",
+      "type": "mobile",
+      "components": [
+        { "kind": "header", "title": "Detalhe", "hasBack": true },
+        { "kind": "image_placeholder", "caption": "Foto do produto", "aspectRatio": "4:3" },
+        { "kind": "text_block", "text": "Nome do Produto", "size": "h1" },
+        { "kind": "text_block", "text": "Descrição curta aqui.", "size": "body" },
+        { "kind": "stat_row", "stats": [{"label": "Preço", "value": "R$99"}, {"label": "Estoque", "value": "12"}, {"label": "Vendas", "value": "340"}] },
+        { "kind": "button", "label": "Adicionar ao carrinho", "style": "primary", "fullWidth": true },
+        { "kind": "nav_bar", "items": ["Home", "Buscar", "Favoritos", "Perfil"] }
+      ],
+      "flows": []
+    }
+  ]
+}` : `{
+  "screens": [
+    {
+      "name": "Login",
+      "type": "mobile",
+      "components": [
+        { "kind": "hero", "title": "Welcome back!", "subtitle": "Sign in to your account", "hasButton": false },
+        { "kind": "form", "fields": [{"label": "Email", "placeholder": "email@example.com"}, {"label": "Password", "placeholder": "••••••••"}], "submitLabel": "Sign In" },
+        { "kind": "button", "label": "Create account", "style": "ghost", "fullWidth": true }
+      ],
+      "flows": [{ "to": "Home", "label": "login" }]
+    },
+    {
+      "name": "Home",
+      "type": "mobile",
+      "components": [
+        { "kind": "header", "title": "AppName", "hasMenu": true },
+        { "kind": "search", "placeholder": "Search products..." },
+        { "kind": "section_title", "text": "Featured", "hasLink": true },
+        { "kind": "card_row", "cards": [{"title": "Product A", "subtitle": "$99"}, {"title": "Product B", "subtitle": "$149"}] },
+        { "kind": "section_title", "text": "Recent" },
+        { "kind": "card_list", "items": [{"title": "Item 1", "meta": "2h ago"}, {"title": "Item 2", "meta": "5h ago"}] },
+        { "kind": "nav_bar", "items": ["Home", "Search", "Favorites", "Profile"] }
+      ],
+      "flows": [{ "to": "Detail", "label": "tap card" }]
+    },
+    {
+      "name": "Detail",
+      "type": "mobile",
+      "components": [
+        { "kind": "header", "title": "Detail", "hasBack": true },
+        { "kind": "image_placeholder", "caption": "Product photo", "aspectRatio": "4:3" },
+        { "kind": "text_block", "text": "Product Name", "size": "h1" },
+        { "kind": "text_block", "text": "Short description here.", "size": "body" },
+        { "kind": "stat_row", "stats": [{"label": "Price", "value": "$99"}, {"label": "Stock", "value": "12"}, {"label": "Sales", "value": "340"}] },
+        { "kind": "button", "label": "Add to cart", "style": "primary", "fullWidth": true },
+        { "kind": "nav_bar", "items": ["Home", "Search", "Favorites", "Profile"] }
+      ],
+      "flows": []
+    }
+  ]
+}`}
+
+## FINAL INSTRUCTIONS:
+- ALL text values in the output JSON MUST be in ${langName} — no mixing languages
+- Generate EVERY screen you identified — if you counted 8 screens, output 8 screens
+- Sub-states, branches, and conditional flows are additional screens, NOT optional extras
+- Do NOT merge steps. Do NOT skip steps. Do NOT summarize.
+- Output ONLY the JSON object — nothing before it, nothing after it
+- The JSON must be parseable by JSON.parse() without any cleanup
+
+Generate the complete wireframe spec now. Start directly with {"screens": [`;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_WIREFRAME_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: wireframePrompt }] }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 65536,
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingLevel: "high" },
+        },
+      }),
+    });
+
+    const data = await response.json();
+    let jsonText = "";
+    const parts = data?.candidates?.[0]?.content?.parts || [];
+    for (const part of parts) {
+      if (!part.thought && part.text) jsonText += part.text;
+    }
+
+    let spec;
+    try {
+      spec = JSON.parse(jsonText);
+    } catch (e) {
+      const match = jsonText.match(/\{[\s\S]*\}/);
+      if (match) spec = JSON.parse(match[0]);
+      else throw new Error("AI returned invalid JSON");
+    }
+
+    if (!spec.screens || spec.screens.length === 0) {
+      throw new Error("No screens generated");
+    }
+
+    console.log(`📐 Wireframe: ${spec.screens.length} screens for "${description}"`);
+    const scene = generateWireframeScene(spec);
+    fs.writeFileSync(path.join(__dirname, "public", "latest-wireframe.json"), JSON.stringify(scene));
+
+    res.json({ success: true, scene, screenCount: spec.screens.length });
+  } catch (err) {
+    console.error("❌ Wireframe error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // POST /v1/ai/carousel/generate
 // Generate Instagram carousel slides from topic or URL
 // ============================================================
@@ -419,7 +847,7 @@ Return ONLY valid JSON, no markdown, no backticks.`;
           temperature: 0.8,
           maxOutputTokens: 8192,
           responseMimeType: "application/json",
-          thinkingConfig: { thinkingBudget: 2048 },
+          thinkingConfig: { thinkingLevel: "high" },
         },
         tools: [{ google_search: {} }],
       }),
@@ -660,7 +1088,7 @@ Os números de likes/retweets/replies devem ser realistas e variados (o primeiro
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: twitterPrompt }] }],
-          generationConfig: { temperature: 0.9, maxOutputTokens: 8192, responseMimeType: "application/json", thinkingConfig: { thinkingBudget: 1024 } },
+          generationConfig: { temperature: 0.9, maxOutputTokens: 8192, responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "high" } },
           tools: [{ google_search: {} }],
         }),
       });
@@ -723,7 +1151,7 @@ Retorne SOMENTE JSON válido com esta estrutura:
           temperature: 0.85,
           maxOutputTokens: 8192,
           responseMimeType: "application/json",
-          thinkingConfig: { thinkingBudget: 2048 },
+          thinkingConfig: { thinkingLevel: "high" },
         },
         tools: [{ google_search: {} }],
       }),
@@ -968,19 +1396,38 @@ app.get("/health", (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+const os = require("os");
+const getLocalIP = () => {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "localhost";
+};
+
+module.exports = app;
+
+if (require.main === module) {
+app.listen(PORT, "0.0.0.0", () => {
+  const localIP = getLocalIP();
   console.log(`
 🤖 Excalidraw AI Backend v2.0 — FULL POWER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   URL:      http://localhost:${PORT}
-   Model:    ${GEMINI_MODEL}
-   API Key:  ${GEMINI_API_KEY ? "✅ Set" : "❌ NOT SET"}
-   
+   Local:      http://localhost:${PORT}
+   Network:    http://${localIP}:${PORT}
+   Model:      ${GEMINI_MODEL} (diagrams/carousel)
+   Wireframe:  ${GEMINI_WIREFRAME_MODEL} (wireframes)
+   API Key:    ${GEMINI_API_KEY ? "✅ Set" : "❌ NOT SET"}
+
    Features:
    ✅ Text-to-Diagram (/v1/ai/text-to-diagram)
    ✅ SVG Generation (/v1/ai/generate-svg)
    ✅ Diagram-to-Code (/v1/ai/diagram-to-code)
-   🎨 Carousel Generator → http://localhost:${PORT}/carousel
+   ✅ Wireframe AI (/v1/ai/wireframe/excalidraw)
+   🎨 Carousel Generator → http://${localIP}:${PORT}/carousel
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   `);
 });
+}
