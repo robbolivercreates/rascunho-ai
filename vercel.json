@@ -1,0 +1,14 @@
+{
+  "buildCommand": "yarn --cwd ./excalidraw-app build",
+  "outputDirectory": "excalidraw-app/build",
+  "installCommand": "yarn install",
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "origin" }
+      ]
+    }
+  ]
+}
