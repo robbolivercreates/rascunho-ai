@@ -96,11 +96,74 @@
     .xbtn.pri:hover { opacity: .85; }
 
     /* Thumbnails */
-    .thumbs { display: flex; gap: 10px; padding: 12px 20px; overflow-x: auto; border-bottom: 1px solid var(--bd); background: var(--bg); flex-shrink: 0; scrollbar-width: thin; }
+    .thumbs { display: flex; gap: 10px; padding: 12px 20px; overflow-x: auto; border-bottom: 1px solid var(--bd); background: var(--bg); flex-shrink: 0; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
     .thumb { flex-shrink: 0; width: 80px; height: 80px; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid transparent; transition: border-color .15s; position: relative; }
     .thumb.on { border-color: var(--ac); }
     .thumb-inner { transform: scale(0.074); transform-origin: top left; width: 1080px; height: 1080px; pointer-events: none; }
     .thumb-num { position: absolute; bottom: 4px; right: 6px; font-size: 9px; font-weight: 700; color: rgba(255,255,255,.6); }
+
+    /* ===== iPad / Tablet responsive ===== */
+    /* Sidebar toggle button (hidden on desktop) */
+    .sb-toggle { display: none; }
+
+    @media (max-width: 1024px) {
+      .app { flex-direction: column; height: auto; min-height: calc(100vh - 57px); min-height: calc(100dvh - 57px); }
+      .sb { width: 100%; min-width: unset; max-height: none; border-right: none; border-bottom: 1px solid var(--bd); padding: 16px 20px; gap: 14px; overflow-y: visible; }
+      .sb.collapsed { display: none; }
+      .sb-toggle {
+        display: flex; align-items: center; justify-content: center; gap: 6px;
+        width: 100%; padding: 10px; background: var(--sf); border: 1px solid var(--bd);
+        border-radius: 8px; color: var(--tx2); font-size: 13px; font-weight: 600;
+        cursor: pointer; font-family: inherit; -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation; margin: 8px 0;
+      }
+      .cv { min-height: 60vh; min-height: 60dvh; }
+
+      /* Increase touch targets */
+      .ch { padding: 12px 8px; min-height: 44px; font-size: 12px; }
+      .cl { width: 36px; height: 36px; }
+      .nav-btn { width: 44px; height: 44px; font-size: 18px; }
+      .dot { width: 10px; height: 10px; }
+      .dot.on { width: 24px; }
+      .xbtn { padding: 11px 18px; min-height: 44px; }
+      .gb { padding: 14px; min-height: 48px; font-size: 15px; }
+      .inp, .sel { font-size: 16px; padding: 12px 13px; }
+      textarea.inp { font-size: 16px; }
+
+      /* Export bar stacks on narrow */
+      .export-bar { flex-wrap: wrap; gap: 8px; }
+      .export-bar span { min-width: 100%; }
+    }
+
+    @media (max-width: 600px) {
+      .sb { padding: 12px 16px; gap: 12px; }
+      .hdr { padding: 12px 16px; }
+      .hdr h1 { font-size: 14px; }
+      .slide-area { padding: 10px; }
+      .thumbs { padding: 8px 12px; gap: 8px; }
+      .thumb { width: 60px; height: 60px; }
+      .thumb-inner { transform: scale(0.055); }
+      .nav-bar { padding: 10px 12px; }
+      .export-bar { padding: 10px 12px; }
+    }
+
+    /* Safe area insets for notched/rounded iPads */
+    @supports (padding: env(safe-area-inset-bottom)) {
+      .export-bar { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+      .sb { padding-left: calc(20px + env(safe-area-inset-left, 0px)); padding-right: calc(20px + env(safe-area-inset-right, 0px)); }
+    }
+
+    /* Touch-friendly: disable hover effects on touch devices */
+    @media (hover: none) {
+      .ch:hover { border-color: var(--bd); color: var(--tx2); }
+      .ch.on:hover { border-color: var(--ac); color: #a29bfe; }
+      .nav-btn:hover:not(:disabled) { border-color: var(--bd); color: var(--tx); }
+      .xbtn:hover { border-color: var(--bd); color: var(--tx); }
+      .xbtn.pri:hover { opacity: 1; }
+      .gb:hover { opacity: 1; transform: none; }
+      .cl:hover { transform: none; }
+      .cl.on:hover { transform: scale(1.08); }
+    }
   </style>
 </head>
 <body>
@@ -116,8 +179,11 @@
 </div>
 
 <div class="app">
+  <!-- Sidebar toggle for tablet/mobile -->
+  <button class="sb-toggle" id="sb-toggle" onclick="toggleSidebar()">▼ Configurações</button>
+
   <!-- Sidebar -->
-  <div class="sb">
+  <div class="sb" id="sidebar">
     <div>
       <span class="fl">Tema ou Link de Artigo</span>
       <textarea class="inp" id="topic" placeholder="Ex: 5 erros que estão matando seu alcance no Instagram..."></textarea>
@@ -234,6 +300,36 @@
 let fmt = 'tips', clr = 'purple';
 let slides = [];
 let currentSlide = 0;
+
+// Sidebar toggle for tablet/mobile
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const btn = document.getElementById('sb-toggle');
+  sb.classList.toggle('collapsed');
+  btn.textContent = sb.classList.contains('collapsed') ? '▶ Configurações' : '▼ Configurações';
+}
+
+// Swipe gesture support for slide navigation on touch devices
+let touchStartX = 0;
+let touchStartY = 0;
+document.addEventListener('touchstart', (e) => {
+  touchStartX = e.changedTouches[0].screenX;
+  touchStartY = e.changedTouches[0].screenY;
+}, { passive: true });
+
+document.addEventListener('touchend', (e) => {
+  if (slides.length === 0) return;
+  const area = document.getElementById('slide-area');
+  if (!area || !area.contains(e.target)) return;
+
+  const dx = e.changedTouches[0].screenX - touchStartX;
+  const dy = e.changedTouches[0].screenY - touchStartY;
+  // Only trigger if horizontal swipe is dominant and > 50px
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+    if (dx < 0) navigate(1);  // swipe left = next
+    else navigate(-1);         // swipe right = prev
+  }
+}, { passive: true });
 
 function pf(e) {
   document.querySelectorAll('[data-f]').forEach(x => x.classList.remove('on'));
