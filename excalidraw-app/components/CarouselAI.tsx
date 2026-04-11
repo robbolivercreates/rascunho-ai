@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { CaptureUpdateAction } from "@excalidraw/excalidraw";
 import { restoreElements } from "@excalidraw/excalidraw/data/restore";
 import { syncInvalidIndices } from "@excalidraw/element";
@@ -21,6 +21,14 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
   const [format, setFormat] = useState("tips");
   const [color, setColor] = useState("purple");
   const [slideCount, setSlideCount] = useState("7");
+  const [isMobileView, setIsMobileView] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobileView(window.innerWidth <= 820);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
 
   const generate = useCallback(async () => {
     if (!topic.trim()) return;
@@ -121,10 +129,10 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
         title="Gerar Carrossel com IA"
         style={{
           position: "fixed",
-          bottom: "24px",
-          right: "24px",
-          width: "48px",
-          height: "48px",
+          bottom: "max(24px, env(safe-area-inset-bottom, 24px))",
+          right: "max(24px, env(safe-area-inset-right, 24px))",
+          width: "52px",
+          height: "52px",
           borderRadius: "14px",
           background: "linear-gradient(135deg, #8b5cf6, #ec4899)",
           border: "none",
@@ -137,6 +145,9 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
           boxShadow: "0 4px 20px rgba(139,92,246,0.4)",
           zIndex: 1000,
           transition: "transform 0.15s",
+          touchAction: "manipulation",
+          WebkitUserSelect: "none",
+          userSelect: "none",
         }}
         onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.08)")}
         onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
@@ -144,18 +155,32 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
         🎠
       </button>
 
+      {/* Backdrop overlay on mobile */}
+      {isOpen && isMobileView && (
+        <div
+          onClick={() => setIsOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            zIndex: 1000,
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+          }}
+        />
+      )}
+
       {/* Panel */}
       {isOpen && (
         <div
           style={{
             position: "fixed",
-            bottom: "80px",
-            right: "24px",
-            width: "320px",
+            ...(isMobileView
+              ? { bottom: 0, left: 0, right: 0, borderRadius: "16px 16px 0 0", maxHeight: "85vh", overflowY: "auto", WebkitOverflowScrolling: "touch" as any }
+              : { bottom: "84px", right: "24px", width: "320px", borderRadius: "16px" }),
             background: "#1a1a2e",
-            borderRadius: "16px",
             border: "1px solid #3f3f46",
-            padding: "20px",
+            padding: isMobileView ? "20px 20px max(20px, env(safe-area-inset-bottom))" : "20px",
             zIndex: 1001,
             boxShadow: "0 12px 48px rgba(0,0,0,0.5)",
             fontFamily: "'Inter', system-ui, sans-serif",
@@ -194,14 +219,14 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
               background: "#27272a",
               border: "1px solid #3f3f46",
               borderRadius: "8px",
-              padding: "10px",
+              padding: isMobileView ? "12px" : "10px",
               color: "#fafafa",
-              fontSize: "13px",
+              fontSize: "16px", // 16px prevents iOS zoom on focus
               fontFamily: "inherit",
               marginTop: "6px",
               marginBottom: "12px",
               resize: "vertical",
-              minHeight: "60px",
+              minHeight: isMobileView ? "80px" : "60px",
             }}
           />
 
@@ -221,14 +246,16 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
                     ? f.id === "twitter" ? "#1d9bf0" : "#8b5cf6"
                     : "#3f3f46"}`,
                   borderRadius: "8px",
-                  padding: "8px",
+                  padding: isMobileView ? "12px 8px" : "8px",
                   color: format === f.id
                     ? f.id === "twitter" ? "#60c8ff" : "#c4b5fd"
                     : "#a1a1aa",
-                  fontSize: "11px",
+                  fontSize: isMobileView ? "13px" : "11px",
                   fontWeight: 600,
                   cursor: "pointer",
                   fontFamily: "inherit",
+                  minHeight: "44px",
+                  touchAction: "manipulation",
                 }}
               >
                 {f.label}
@@ -246,14 +273,15 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
                     key={c.id}
                     onClick={() => setColor(c.id)}
                     style={{
-                      width: "22px",
-                      height: "22px",
+                      width: isMobileView ? "32px" : "22px",
+                      height: isMobileView ? "32px" : "22px",
                       borderRadius: "50%",
                       background: c.bg,
                       border: `2px solid ${color === c.id ? "#fff" : "transparent"}`,
                       cursor: "pointer",
                       transform: color === c.id ? "scale(1.1)" : "scale(1)",
                       transition: "all 0.12s",
+                      touchAction: "manipulation",
                     }}
                   />
                 ))}
@@ -289,16 +317,18 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
             disabled={isLoading || !topic.trim()}
             style={{
               width: "100%",
-              padding: "12px",
+              padding: isMobileView ? "15px" : "12px",
               background: isLoading ? "#4c1d95" : "linear-gradient(135deg, #8b5cf6, #7c3aed)",
               border: "none",
               borderRadius: "10px",
               color: "#fff",
-              fontSize: "14px",
+              fontSize: isMobileView ? "16px" : "14px",
               fontWeight: 700,
               cursor: isLoading ? "wait" : "pointer",
               opacity: (!topic.trim()) ? 0.4 : 1,
               fontFamily: "inherit",
+              minHeight: "48px",
+              touchAction: "manipulation",
             }}
           >
             {isLoading ? "⏳ Desenhando no canvas..." : "🪄 Gerar Carrossel no Canvas"}
