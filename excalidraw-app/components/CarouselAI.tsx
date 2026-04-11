@@ -130,8 +130,8 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
       <style>{`
         .carousel-ai-fab {
           position: fixed;
-          bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-          right: calc(24px + env(safe-area-inset-right, 0px));
+          bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+          right: calc(16px + env(safe-area-inset-right, 0px));
           width: 52px;
           height: 52px;
           border-radius: 14px;
@@ -162,8 +162,8 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
           position: fixed;
           right: calc(24px + env(safe-area-inset-right, 0px));
           width: min(320px, calc(100vw - 48px));
-          max-height: calc(100vh - 100px - env(safe-area-inset-bottom, 0px));
-          max-height: calc(100dvh - 100px - env(safe-area-inset-bottom, 0px));
+          max-height: calc(100vh - 160px - env(safe-area-inset-bottom, 0px));
+          max-height: calc(100dvh - 160px - env(safe-area-inset-bottom, 0px));
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           background: #1a1a2e;
@@ -181,7 +181,7 @@ export const CarouselAIButton = ({ excalidrawAPI }: CarouselAIButtonProps) => {
           max-height: 60dvh;
         }
         .carousel-ai-panel:not(.keyboard-up) {
-          bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+          bottom: calc(140px + env(safe-area-inset-bottom, 0px));
         }
 
         .carousel-ai-close {

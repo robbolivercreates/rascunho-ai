@@ -155,6 +155,93 @@ polyfill();
 
 window.EXCALIDRAW_THROTTLE_RENDER = true;
 
+// ═══════════════════════════════════════════════════════════════
+// iPad / Tablet Compatibility Setup
+// Ensures proper viewport, safe areas, and touch behavior
+// ═══════════════════════════════════════════════════════════════
+(() => {
+  // 1. Ensure viewport meta tag has viewport-fit=cover for safe areas
+  //    and prevents auto-zoom on input focus (font-size < 16px)
+  let viewportMeta = document.querySelector<HTMLMetaElement>(
+    'meta[name="viewport"]',
+  );
+  if (viewportMeta) {
+    const content = viewportMeta.getAttribute("content") || "";
+    if (!content.includes("viewport-fit=cover")) {
+      viewportMeta.setAttribute(
+        "content",
+        content + ", viewport-fit=cover",
+      );
+    }
+  } else {
+    viewportMeta = document.createElement("meta");
+    viewportMeta.name = "viewport";
+    viewportMeta.content =
+      "width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0";
+    document.head.appendChild(viewportMeta);
+  }
+
+  // 2. Apple-specific meta tags for web app experience on iPad
+  if (!document.querySelector('meta[name="apple-mobile-web-app-capable"]')) {
+    const capable = document.createElement("meta");
+    capable.name = "apple-mobile-web-app-capable";
+    capable.content = "yes";
+    document.head.appendChild(capable);
+  }
+  if (
+    !document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')
+  ) {
+    const statusBar = document.createElement("meta");
+    statusBar.name = "apple-mobile-web-app-status-bar-style";
+    statusBar.content = "black-translucent";
+    document.head.appendChild(statusBar);
+  }
+
+  // 3. CSS fixes for iOS Safari: fullscreen height, safe areas, touch
+  const iPadStyles = document.createElement("style");
+  iPadStyles.textContent = `
+    /* Use dvh for proper height on iOS Safari (accounts for address bar) */
+    html, body, #root {
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+    }
+
+    /* Prevent pull-to-refresh and rubber-band scrolling on iOS */
+    body {
+      position: fixed;
+      width: 100%;
+      -webkit-touch-callout: none;
+    }
+
+    /* Safe area padding for Excalidraw UI elements */
+    .excalidraw-app {
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    /* Prevent double-tap zoom on interactive elements (Apple Pencil double-tap is handled by OS) */
+    .excalidraw button,
+    .excalidraw input,
+    .excalidraw select,
+    .excalidraw textarea,
+    .excalidraw label {
+      touch-action: manipulation;
+    }
+
+    /* Ensure canvas takes full available space on tablet */
+    @media (pointer: coarse), (pointer: fine) and (max-width: 1366px) and (hover: none) {
+      .excalidraw .App-menu {
+        -webkit-tap-highlight-color: transparent;
+      }
+    }
+  `;
+  document.head.appendChild(iPadStyles);
+})();
+
 declare global {
   interface BeforeInstallPromptEventChoiceResult {
     outcome: "accepted" | "dismissed";
